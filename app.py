@@ -925,7 +925,7 @@ def show_esthetician_management():
                     ):
                         # Approve
                         if approve_esthetician_env(esthetician['_id'], True, "N/A", environment=environment) == "true":
-                            st.experimental_rerun()
+                            st.query_params.update(rerun=True)
 
                 with col2:
                     reason_for_rejection = st.text_input(
@@ -943,7 +943,7 @@ def show_esthetician_management():
                             reason_for_rejection=reason_for_rejection,
                             environment=environment
                         ) == "true":
-                            st.experimental_rerun()
+                            st.query_params.update(rerun=True)
 
             st.markdown("---")
     else:
