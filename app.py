@@ -847,7 +847,12 @@ def approve_esthetician_env(
     """
     Approve or reject an esthetician in either the dev/test or production environment.
     """
-    base_url = get_base_url(environment)
+    if environment == "prod":
+        base_url = prod_api_base_url
+        token = st.session_state.get("auth_token_prod", "")
+    else:
+        base_url = api_base_url
+        token = st.session_state.get("auth_token", "")
     endpoint = f"{base_url}/admin/approve_esthetician/{esthetician_id}"
 
     try:
@@ -861,7 +866,7 @@ def approve_esthetician_env(
         response = requests.put(
             endpoint,
             json=request_body,
-            headers={"Authorization": f"Bearer {st.session_state.get('auth_token', '')}"}
+            headers={"Authorization": f"Bearer {token}"}
         )
         logging.info(f"[{environment.upper()}] Response status code: {response.status_code}")
         logging.info(f"[{environment.upper()}] Response content: {response.content}")
