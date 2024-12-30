@@ -31,7 +31,7 @@ index_name = "title-index"
 
 # API base URL
 api_base_url = st.secrets["API_BASE_URL"]
-base_url = st.secrets["BASE_URL"]
+prod_api_base_url = st.secrets["PROD_API_BASE_URL"]
 
 # Initialize Pinecone
 try:
@@ -313,6 +313,11 @@ def show_admin_page():
     st.subheader("Menu")
     
     if st.button("Esthetician Management"):
+        st.session_state["environment"] = "dev"
+        st.session_state["page"] = "esthetician_management"
+    
+    if st.button("Esthetician Management (Prod)"):
+        st.session_state["environment"] = "prod"
         st.session_state["page"] = "esthetician_management"
     
     if st.button("Quiz Management"):
@@ -797,37 +802,147 @@ def edit_quiz_page():
         st.session_state.pop("editing_quiz")
         st.session_state["page"] = "quiz_management"
 
+def list_estheticians_env(
+    page: int = 1,
+    limit: int = 10,
+    environment: str = "dev"
+) -> List[Dict[str, Any]]:
+    """
+    Fetch estheticians from either the dev/test or production environment for approval.
+    """
+
+    if environment == "prod":
+        base_url = prod_api_base_url
+        token = st.session_state.get("auth_token_prod", "")
+    else:
+        base_url = api_base_url
+        token = st.session_state.get("auth_token", "")
+    endpoint = f"{base_url}/admin/esthetician/approval_list"
+    try:
+        response = requests.get(
+            endpoint,
+            params={"page": page, "limit": limit},
+            headers={"Authorization": f"Bearer {token}"}
+        )
+        logging.info(f"[{environment.upper()}] Response status code: {response.status_code}")
+        logging.info(f"[{environment.upper()}] Response content: {response.content}")
+
+        result = handle_api_response(response)
+        if result and result.get("success"):
+            return result.get("estheticians", [])
+        else:
+            st.error(f"[{environment.upper()}] Failed to fetch estheticians. Please try again later.")
+            return []
+    except Exception as e:
+        st.error(f"[{environment.upper()}] An error occurred while fetching estheticians.")
+        logging.error(f"[{environment.upper()}] Error in list_estheticians_env: {e}")
+        return []
+
+def approve_esthetician_env(
+    esthetician_id: str,
+    is_approved: bool = True,
+    reason_for_rejection: str = "N/A",
+    environment: str = "dev"
+) -> str:
+    """
+    Approve or reject an esthetician in either the dev/test or production environment.
+    """
+    base_url = get_base_url(environment)
+    endpoint = f"{base_url}/admin/approve_esthetician/{esthetician_id}"
+
+    try:
+        is_approved_str = "true" if is_approved else "false"
+        request_body = {
+            "is_approved": is_approved_str,
+            "reason_for_rejection": reason_for_rejection if not is_approved else "N/A"
+        }
+
+        logging.info(f"[{environment.upper()}] Request body for approving esthetician: {request_body}")
+        response = requests.put(
+            endpoint,
+            json=request_body,
+            headers={"Authorization": f"Bearer {st.session_state.get('auth_token', '')}"}
+        )
+        logging.info(f"[{environment.upper()}] Response status code: {response.status_code}")
+        logging.info(f"[{environment.upper()}] Response content: {response.content}")
+
+        result = handle_api_response(response)
+        if result and result.get("success"):
+            status = "approved" if is_approved else "rejected"
+            st.success(f"[{environment.upper()}] Esthetician {esthetician_id} {status} successfully.")
+            return "true"
+        else:
+            st.error(f"[{environment.upper()}] Failed to update esthetician {esthetician_id}.")
+            return "false"
+    except Exception as e:
+        st.error(f"[{environment.upper()}] An error occurred while updating esthetician {esthetician_id}.")
+        logging.error(f"[{environment.upper()}] Error in approve_esthetician_env: {e}")
+        return "false"
+
 # Show Esthetician Management
 def show_esthetician_management():
-    st.title("Esthetician Management")
+    """
+    A unified page that displays and manages estheticians in either dev or prod,
+    depending on st.session_state['environment'].
+    """
+    # Default to dev if none is set
+    environment = st.session_state.get("environment", "dev")
+    st.title(f"Esthetician Management - {environment.upper()}")
 
     page = st.number_input("Page", min_value=1, value=1)
     limit = st.number_input("Estheticians per page", min_value=1, max_value=100, value=10)
 
-    estheticians = list_estheticians(page, limit)
+    # Fetch estheticians based on environment
+    estheticians = list_estheticians_env(page, limit, environment=environment)
 
     if estheticians:
         for esthetician in estheticians:
             st.write(f"ID: {esthetician['_id']}")
             st.write(f"Name: {esthetician['full_name']}, License No: {esthetician['license_no']}")
             st.write(f"Email: {esthetician['email']}, Status: {esthetician['esthetician_status']}")
-            st.write(f"License File: {esthetician['license_file']['data']}")
-            if "reason_for_rejection" in esthetician and esthetician["reason_for_rejection"] != "N/A":
+            
+            # If there's a license_file, display a snippet:
+            if esthetician.get("license_file") and "data" in esthetician["license_file"]:
+                st.write(f"License File: {esthetician['license_file']['data']}")
+
+            # Show reason for rejection if available
+            if esthetician.get("reason_for_rejection", "N/A") != "N/A":
                 st.write(f"Reason for Rejection: {esthetician['reason_for_rejection']}")
+
+            # If not approved, show approve/reject buttons
             if esthetician['esthetician_status'] != 'approved':
                 col1, col2 = st.columns(2)
+
                 with col1:
-                    if st.button(f"Approve {esthetician['full_name']}", key=f"approve_{esthetician['_id']}"):
-                        if approve_esthetician(esthetician['_id'], is_approved=True) == "true":
-                            st.query_params.update(rerun=True)
+                    if st.button(
+                        f"Approve {esthetician['full_name']} ({environment.upper()})",
+                        key=f"approve_{environment}_{esthetician['_id']}"
+                    ):
+                        # Approve
+                        if approve_esthetician_env(esthetician['_id'], True, "N/A", environment=environment) == "true":
+                            st.experimental_rerun()
+
                 with col2:
-                    reason_for_rejection = st.text_input(f"Reason for rejecting {esthetician['full_name']}", key=f"reason_{esthetician['_id']}")
-                    if st.button(f"Reject {esthetician['full_name']}", key=f"reject_{esthetician['_id']}"):
-                        if approve_esthetician(esthetician['_id'], is_approved=False, reason_for_rejection=reason_for_rejection) == "true":
-                            st.query_params.update(rerun=True)
-            st.markdown("---")  # Add a horizontal line
+                    reason_for_rejection = st.text_input(
+                        f"Reason for rejecting {esthetician['full_name']} ({environment.upper()})",
+                        key=f"reason_{environment}_{esthetician['_id']}"
+                    )
+                    if st.button(
+                        f"Reject {esthetician['full_name']} ({environment.upper()})",
+                        key=f"reject_{environment}_{esthetician['_id']}"
+                    ):
+                        # Reject
+                        if approve_esthetician_env(
+                            esthetician['_id'],
+                            is_approved=False,
+                            reason_for_rejection=reason_for_rejection,
+                            environment=environment
+                        ) == "true":
+                            st.experimental_rerun()
+
+            st.markdown("---")
     else:
-        st.write("No estheticians found or failed to fetch the list.")
+        st.info(f"[{environment.upper()}] No estheticians found or failed to fetch the list.")
 
     if st.button("Back to Admin Page"):
         st.session_state["page"] = "admin"
@@ -860,6 +975,50 @@ def show_login_page():
         else:
             st.error("Login failed. Please check your credentials or API URL.")
 
+def show_login_page():
+    st.title("Esthelogy Admin")
+
+    username = st.text_input("Email")
+    password = st.text_input("Password", type="password")
+
+    # Existing Dev API URL
+    dev_api_url = f"{api_base_url}/user/login"
+    # New: Production API URL
+    prod_api_url = f"{prod_api_base_url}/user/login"
+
+    if st.button("Login"):
+        logging.info(f"Attempting to login (Dev) with email: {username}")
+        dev_auth_response = authenticate(username, password, dev_api_url)
+        logging.info(f"Dev Authentication response: {dev_auth_response}")
+
+        # Check if Dev login succeeded
+        if dev_auth_response and dev_auth_response.get("success"):
+            st.success("Dev login successful!")
+            st.session_state["auth_token"] = dev_auth_response.get("access_token", "")
+            st.session_state["user_id"] = dev_auth_response.get("user_id", "")
+            user_role = dev_auth_response.get("role", "")
+        else:
+            st.error("Dev login failed. Please check your credentials or Dev API.")
+
+        # Now log into Prod
+        logging.info(f"Attempting to login (Prod) with email: {username}")
+        prod_auth_response = authenticate(username, password, prod_api_url)
+        logging.info(f"Prod Authentication response: {prod_auth_response}")
+
+        # Check if Prod login succeeded
+        if prod_auth_response and prod_auth_response.get("success"):
+            st.success("Prod login successful!")
+            # Store token in a separate key so you can differentiate
+            st.session_state["auth_token_prod"] = prod_auth_response.get("access_token", "")
+            st.session_state["user_id_prod"] = prod_auth_response.get("user_id", "")
+        else:
+            st.warning("Prod login failed. You may not be able to manage Prod data.")
+
+        if user_role == "admin":
+            st.session_state["page"] = "admin"
+        else:
+            st.session_state["page"] = "chatroom"
+
 # Authenticate function
 def authenticate(username, password, api_url):
     payload = {"email": username, "password": password}
@@ -879,6 +1038,10 @@ def show_navigation_menu():
     if st.sidebar.button("Admin Page", key="nav_admin_page"):
         st.session_state["page"] = "admin"
     if st.sidebar.button("Esthetician Management", key="nav_esthetician_management"):
+        st.session_state["environment"] = "dev"
+        st.session_state["page"] = "esthetician_management"
+    if st.sidebar.button("Esthetician Management (Prod)", key="nav_prod_esthetician_management"):
+        st.session_state["environment"] = "prod"
         st.session_state["page"] = "esthetician_management"
     if st.sidebar.button("Quiz Management", key="nav_quiz_management"):
         st.session_state["page"] = "quiz_management"
