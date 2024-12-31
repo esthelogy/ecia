@@ -87,17 +87,30 @@ def handle_api_response(response):
     try:
         response.raise_for_status()
     except requests.exceptions.HTTPError as http_err:
-        st.error(f"HTTP error occurred: {response.json().get('message', str(http_err))}")
-        logging.error(f"HTTP error occurred: {http_err}")
+        try:
+            error_json = response.json()
+            api_message = error_json.get("message", str(http_err))
+        except ValueError:
+            api_message = response.text or str(http_err)
+        st.error(f"HTTP error occurred: {api_message}")
+        logging.error(f"HTTP error occurred: {api_message}")
         logging.info(f"Response content: {response.content}")
         return None
     except Exception as err:
-        st.error(f"An error occurred: {err}")
-        logging.error(f"Unexpected error: {err}")
+        try:
+            error_json = response.json()
+            api_message = error_json.get("message", str(err))
+        except ValueError:
+            api_message = response.text or str(err)
+        st.error(f"An error occurred: {api_message}")
+        logging.error(f"Unexpected error: {api_message}")
         logging.info(f"Response content: {response.content}")
         return None
-    logging.info(f"Successful API Response content: {response.content}")
-    return response.json()
+    try:
+        return response.json()
+    except ValueError:
+        st.error("Failed to parse JSON response from server.")
+        return None
 
 # Caching for embedding generation to improve scalability
 @lru_cache(maxsize=1024)
@@ -140,7 +153,8 @@ def create_quiz(quiz_data):
             st.success("Quiz created successfully!")
             return result.get("quiz")
         else:
-            st.error(f"Failed to create quiz: {result.get('message', 'Unknown error')}")
+            api_message = result.get('message', 'Unknown error from server')
+            st.error(f"Failed to create quiz: {api_message}")
     except Exception as e:
         st.error("Failed to create quiz. Please try again later.")
         logging.error(f"Error in create_quiz: {e}")
@@ -183,7 +197,7 @@ def get_quiz_details(quiz_id: str):
         if response.status_code == 200:
             return response.json().get("quiz", {})
         else:
-            st.error(f"Failed to fetch quiz details: {response.status_code}")
+            st.error(f"Failed to fetch quiz details: {response.json().get("message", "Unknown error")}")
             return {}
     except Exception as e:
         logging.error(f"Error in get_quiz_details: {e}")
@@ -300,7 +314,7 @@ def approve_esthetician(esthetician_id: str, is_approved: bool = True, reason_fo
             st.success(f"Esthetician {esthetician_id} {status} successfully.")
             return "true"
         else:
-            st.error(f"Failed to update esthetician {esthetician_id}.")
+            st.error(f"Failed to update esthetician {esthetician_id}. Reason: {result.get('message', 'Unknown error')}")
             return "false"
     except Exception as e:
         st.error(f"An error occurred while updating esthetician {esthetician_id}.")
@@ -862,22 +876,23 @@ def approve_esthetician_env(
             "reason_for_rejection": reason_for_rejection if not is_approved else "N/A"
         }
 
-        logging.info(f"[{environment.upper()}] Request body for approving esthetician: {request_body}")
+        print(f"[{environment.upper()}] Request body for approving esthetician: {request_body}")
         response = requests.put(
             endpoint,
             json=request_body,
             headers={"Authorization": f"Bearer {token}"}
         )
-        logging.info(f"[{environment.upper()}] Response status code: {response.status_code}")
-        logging.info(f"[{environment.upper()}] Response content: {response.content}")
+        print(f"[{environment.upper()}] Response status code: {response.status_code}")
+        print(f"[{environment.upper()}] Response content: {response.content}")
 
         result = handle_api_response(response)
+        print(result)
         if result and result.get("success"):
             status = "approved" if is_approved else "rejected"
             st.success(f"[{environment.upper()}] Esthetician {esthetician_id} {status} successfully.")
             return "true"
         else:
-            st.error(f"[{environment.upper()}] Failed to update esthetician {esthetician_id}.")
+            st.error(f"[{environment.upper()}] Failed to update esthetician {esthetician_id}. Reason: {result.get('message', 'Unknown error')}")
             return "false"
     except Exception as e:
         st.error(f"[{environment.upper()}] An error occurred while updating esthetician {esthetician_id}.")
